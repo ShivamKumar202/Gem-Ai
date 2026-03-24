@@ -1,0 +1,6 @@
+@Gem.API_HostAddress = http://localhost:5137
+
+GET {{Gem.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

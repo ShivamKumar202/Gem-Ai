@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Gem.API/Gem.API.csproj" />
+  <Project Path="Gem.BLL/Gem.BLL.csproj" />
+  <Project Path="Gem.COMMON/Gem.COMMON.csproj" />
+  <Project Path="Gem.DAL/Gem.DAL.csproj" />
+</Solution>
