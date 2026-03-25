@@ -10,12 +10,13 @@
     <ProjectReference Include="..\Gem.COMMON\Gem.COMMON.csproj" />
     <ProjectReference Include="..\Gem.DAL\Gem.DAL.csproj" />
   </ItemGroup>
+	<PropertyGroup>
+		<NoWarn>SKEXP0001</NoWarn>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <Folder Include="Common\" />
-  </ItemGroup>
-
-  <ItemGroup>
+	<ItemGroup>
+    <PackageReference Include="Google.GenAI" Version="1.5.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.9" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.4.1" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.4.1" />
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.74.0" />

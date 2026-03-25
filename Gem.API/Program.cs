@@ -1,31 +1,41 @@
-using Gem.API.Helpers.Wrapper;
+using Gem.API.Helpers.Filters;
 using Gem.BLL.IServices;
 using Gem.BLL.Services;
-using Google.GenAI;
+using Gem.DAL;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.TextGeneration;
+using Microsoft.SemanticKernel.Connectors.Google;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<GemContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Add services to the container.
-builder.Services.AddControllers();
+// Add controllers and Swagger
+builder.Services.AddControllers(options => options.Filters.Add<ErrorHandlingFilter>());
+builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddScoped<IChatService, ChatService>();
 
-// Semantic Kernel registration
+// Register your services
+builder.Services.AddScoped<IChatService, ChatService>();
+builder.Services.AddScoped<IImgGenerationService, ImageGenerationService>();
+builder.Services.AddScoped<ILogExceptionServices, ExceptionLogService>();
+
+// Create Kernel as a singleton
 builder.Services.AddSingleton(sp =>
 {
-    var kernelBuilder = Kernel.CreateBuilder().AddGoogleAIGeminiChatCompletion(
-        modelId: builder.Configuration["GoogleAI:Model"],
-    apiKey: builder.Configuration["GoogleAI:ApiKey"]);
+    var kernel = Kernel.CreateBuilder();
 
-    return kernelBuilder.Build();
+    var googleChatApiKey = builder.Configuration["GoogleAI:ApiKey"];
+    var googleChatModel = builder.Configuration["GoogleAI:Model"];
+    kernel.AddGoogleAIGeminiChatCompletion(
+        modelId: googleChatModel,
+        apiKey: googleChatApiKey,
+        apiVersion: GoogleAIVersion.V1
+    );
+    return kernel.Build();
 });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -38,9 +48,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
 app.UseAuthorization();
-
 app.MapControllers();
 
 app.Run();
