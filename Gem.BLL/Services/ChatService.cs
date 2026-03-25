@@ -1,9 +1,16 @@
-﻿using Gem.BLL.IServices;
-using Gem.COMMON.ViewModel.Chat;
+﻿using Azure.Core;
+using Gem.BLL.Common.Utility;
+using Gem.BLL.Interfaces.Services;
+using Gem.COMMON.Enum;
+using Gem.COMMON.ResultModel;
+using Gem.COMMON.Utility;
+using Gem.COMMON.ViewModel.Prompt;
+using Gem.DAL;
+using Gem.DAL.Domain;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.Google;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace Gem.BLL.Services
@@ -11,87 +18,47 @@ namespace Gem.BLL.Services
     public class ChatService(Kernel kernel) : IChatService
     {
         private readonly Kernel _kernel = kernel;
-        private static readonly ConcurrentDictionary<string, ChatHistory> _userChats  = new ConcurrentDictionary<string, ChatHistory>();
 
-        public async Task<string> ExecutePromptAsync(VMChat request, CancellationToken cancellationToken = default)
+        public async Task<ResModel<string>> ExecutePromptAsync(List<Message> messages, string prompt, int? maxTokens, double? temperature = 0.7, CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(request.Prompt))
-                throw new ArgumentException("Prompt cannot be empty", nameof(request));
+            if (string.IsNullOrWhiteSpace(prompt))
+                throw new ArgumentException("Prompt cannot be empty");
 
-            var userId = string.Empty;
+            var chatHistory = new ChatHistory();
+            foreach (var msg in messages)
+            {
+                if (msg.Role == ChatRoles.User)
+                    chatHistory.AddUserMessage(msg.Content);
 
-            if (string.IsNullOrWhiteSpace(userId))
-                userId = request.SessionId;
+                else if (msg.Role == ChatRoles.Assistant)
+                    chatHistory.AddAssistantMessage(msg.Content);
+            }
 
-
-            if (string.IsNullOrWhiteSpace(userId))
-                throw new ArgumentException("UserId or SessionId is required");
-
+            chatHistory.AddUserMessage(prompt);
 
             var stopwatch = Stopwatch.StartNew();
 
-            try
+            var chatCompletionService = _kernel.GetRequiredService<IChatCompletionService>();
+
+
+            var executionSettings = new GeminiPromptExecutionSettings
             {
-                // Thread-safe history per user
-                var chatHistory = GetOrCreateHistory(request.SessionId);
+                Temperature = temperature,
+                MaxTokens = maxTokens
+            };
 
-                // Add user message
-                chatHistory.AddUserMessage(request.Prompt);
+            var result = await chatCompletionService.GetChatMessageContentAsync(chatHistory, executionSettings, cancellationToken: cancellationToken);
 
-                var chatCompletionService = _kernel.GetRequiredService<IChatCompletionService>();
+            var response = result.Content ?? string.Empty;
 
-                var executionSettings = new GeminiPromptExecutionSettings
-                {
-                    Temperature = request.Temperature,
-                    MaxTokens = request.MaxTokens
-                };
 
-                var result = await chatCompletionService.GetChatMessageContentAsync(
-                    chatHistory,
-                    executionSettings,
-                    cancellationToken: cancellationToken
-                );
-
-                var response = result.Content ?? string.Empty;
-
-                chatHistory.AddAssistantMessage(response);
-
-                TrimHistory(chatHistory, 20);
-
-                stopwatch.Stop();
-
-                return response;
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                throw new InvalidOperationException($"Error executing prompt: {ex.Message}", ex);
-            }
+            stopwatch.Stop();
+            return SD.CreateResponse(response, true, "prompt successfull", (int)StatusCode.OK);
         }
-        public Task<string> ExecutePromptStreamAsync(VMChat request, CancellationToken cancellationToken = default)
+
+        public Task<string> ExecutePromptStreamAsync(VMPromptRequest request, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException();
         }
-
-
-        private void TrimHistory(ChatHistory history, int maxMessages)
-        {
-            while (history.Count > maxMessages)
-            {
-                history.RemoveAt(0);
-            }
-        }
-
-        private static readonly ConcurrentDictionary<string, object> _locks = new();
-
-        private object GetUserLock(string userId)
-        {
-            return _locks.GetOrAdd(userId, _ => new object());
-        }
-        private ChatHistory GetOrCreateHistory(string userId)
-        {
-            return _userChats.GetOrAdd(userId, _ => new ChatHistory());
-        }
     }
-
 }

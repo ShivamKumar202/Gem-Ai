@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace Gem.BLL.IServices
+namespace Gem.BLL.Interfaces.Services
 {
     public interface IImgGenerationService
     {

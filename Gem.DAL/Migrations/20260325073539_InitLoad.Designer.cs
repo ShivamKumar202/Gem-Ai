@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Gem.DAL.Migrations
 {
     [DbContext(typeof(GemContext))]
-    [Migration("20260325055910_InitLoad")]
+    [Migration("20260325073539_InitLoad")]
     partial class InitLoad
     {
         /// <inheritdoc />
@@ -110,11 +110,8 @@ namespace Gem.DAL.Migrations
 
             modelBuilder.Entity("Gem.DAL.Domain.Conversations", b =>
                 {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+                    b.Property<string>("Id")
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
@@ -174,25 +171,27 @@ namespace Gem.DAL.Migrations
 
             modelBuilder.Entity("Gem.DAL.Domain.Message", b =>
                 {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+                    b.Property<string>("Id")
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<string>("Content")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("ConversationId")
+                        .HasColumnType("nvarchar(450)");
+
                     b.Property<string>("Model")
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("Role")
-                        .HasColumnType("nvarchar(max)");
+                    b.Property<int>("Role")
+                        .HasColumnType("int");
 
                     b.Property<int>("TokenUsed")
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ConversationId");
 
                     b.ToTable("Message");
                 });
@@ -337,6 +336,15 @@ namespace Gem.DAL.Migrations
                         .HasForeignKey("UserId");
 
                     b.Navigation("ApplicationUser");
+                });
+
+            modelBuilder.Entity("Gem.DAL.Domain.Message", b =>
+                {
+                    b.HasOne("Gem.DAL.Domain.Conversations", "Conversations")
+                        .WithMany()
+                        .HasForeignKey("ConversationId");
+
+                    b.Navigation("Conversations");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

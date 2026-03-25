@@ -1,7 +1,7 @@
 ﻿using Gem.COMMON.ResultModel;
 using Gem.DAL.Domain;
 
-namespace Gem.BLL.IServices
+namespace Gem.BLL.Interfaces.Services
 {
     public interface ILogExceptionServices
     {

@@ -1,4 +1,4 @@
-﻿using Gem.BLL.IServices;
+﻿using Gem.BLL.Interfaces.Services;
 using Google.GenAI;
 using Google.GenAI.Types;
 using Microsoft.Extensions.AI;

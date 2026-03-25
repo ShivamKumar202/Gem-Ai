@@ -1,4 +1,4 @@
-﻿using Gem.BLL.IServices;
+﻿using Gem.BLL.Interfaces.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 

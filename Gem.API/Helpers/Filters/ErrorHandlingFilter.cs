@@ -1,4 +1,4 @@
-﻿using Gem.BLL.IServices;
+﻿using Gem.BLL.Interfaces.Services;
 using Gem.DAL.Domain;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
