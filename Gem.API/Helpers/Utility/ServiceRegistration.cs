@@ -13,14 +13,18 @@ namespace Gem.API.Helpers.Utility
             services.AddHttpContextAccessor();
 
             // Services
-            services.AddScoped<IConversationService, ConversationService>();
+            services.AddScoped<IThreadService, ThreadService>();
             services.AddScoped<ILogExceptionServices, ExceptionLogService>();
             services.AddScoped<IImgGenerationService, ImageGenerationService>();
             services.AddScoped<IUserContextService, UserContextService>();
             services.AddScoped<IChatService, ChatService>();
+            services.AddScoped<ITokenUsageService, TokenUsageService>();
+
 
             services.AddScoped<IMessageService, MessageService>();
+            services.AddScoped<IAttachementService, AttachementService>();
             services.AddScoped<IImageAnalyzerService, ImageAnalyzerService>();
+            services.AddScoped<IFileStorageService,FileStorageService>();
 
             // Orchestors
             services.AddScoped<IAiOrchestratorService, AiOrchestratorService>();

@@ -1,22 +1,26 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Net.Mail;
 using System.Reflection;
 namespace Gem.COMMON.Utility
 {
     public static class Constant
     {
-       
+
     }
 
     public static class Messages
     {
-        // Response message for file
-        public const string File_DELSUCCESS = "File deleted successfully";
-        public const string File_NOTFOUND = "File not found";
-        public const string File_ERROR = "An error occurred while deleting the file:";
-        public const string FILE_SUCCESS = "Files uploaded successfully.";
-        public const string FILE_SAVE_RETRUEVE_SUCCESS = "File retrieved and saved successfully.";
-        public const string FILE_TYPE_NOT_ALLOWED = "File Type is not allowed";
-        public const string FILE_SIZE_EXCEEDED = "File size should be less than 50mb";
+        //Reponse messages related to Image and File Analysis
+        public const string ANALYSIS_SUCCESS = "Analysis done successfully";
+        // Response message for Attachment
+        public const string ATTACHMENT_DELSUCCESS = "File deleted successfully";
+        public const string ATTACHMENT_NOTFOUND = "File not found";
+        public const string ATTACHMENT_ERROR = "An error occurred while deleting the attachement:";
+        public const string ATTACHMENT_SUCCESS = "Attachments saved successfully";
+        public const string NO_ATTACHMENT = "No attachment provided";
+        public const string ATTACHMENT_INVALID = "Attachment must have either File or Data.";
+        public const string ATTACHMENT_TYPE_NOT_ALLOWED = "Attachement Type is not allowed";
+        public const string ATTACHMENT_SIZE_EXCEEDED = "Attachement size should be less than 50mb";
 
         //Response Messages for User
         public const string ALREADY_USER = "User already exist. Please log in";
@@ -138,7 +142,8 @@ namespace Gem.COMMON.Utility
 
 
         public const string UNAUTHORIZED = "You are not authorized to perform this action.";
-
+        public static readonly string MESSAGE_SUCCESS;
+        public static readonly string TOKEN_USAGE_SUCCESS;
     }
 
     public static class VerificationType

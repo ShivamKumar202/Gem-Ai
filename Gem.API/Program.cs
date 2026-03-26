@@ -1,12 +1,9 @@
 using Gem.API.Helpers.Filters;
 using Gem.API.Helpers.Utility;
-using Gem.BLL.Interfaces.Services;
-using Gem.BLL.Services;
 using Gem.DAL;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Connectors.Google;
-using System.Runtime.CompilerServices;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<GemContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -26,6 +23,7 @@ builder.Services.AddSingleton(sp =>
 
     var googleChatApiKey = builder.Configuration["GoogleAI:ApiKey"];
     var googleChatModel = builder.Configuration["GoogleAI:Model"];
+
     kernel.AddGoogleAIGeminiChatCompletion(
         modelId: googleChatModel,
         apiKey: googleChatApiKey,

@@ -5,115 +5,151 @@ using Gem.COMMON.Enum;
 using Gem.COMMON.ResultModel;
 using Gem.COMMON.ViewModel.Messages;
 using Gem.COMMON.ViewModel.Prompt;
+using Gem.COMMON.ViewModel.Response;
+using Gem.COMMON.ViewModel.Thread;
+using Gem.COMMON.ViewModel.Token_Usage;
 using Gem.DAL.Domain;
-using Microsoft.SemanticKernel.ChatCompletion;
+using Google.GenAI.Types;
 
 namespace Gem.BLL.Orchestrators
 {
-    public class AiOrchestratorService(IChatService chatService, IConversationService conversationService, IMessageService messageService, IImageAnalyzerService imageAnalyzerService) : IAiOrchestratorService
+    public class AiOrchestratorService(IChatService chatService, IThreadService threadService, IMessageService messageService, IImageAnalyzerService imageAnalyzerService, ITokenUsageService tokenUsageService) : IAiOrchestratorService
     {
         private readonly IChatService _chatService = chatService;
-        private readonly IConversationService _conversationService = conversationService;
+        private readonly IThreadService _threadService = threadService;
         private readonly IMessageService _messageService = messageService;
         private readonly IImageAnalyzerService _imageAnalyzerService = imageAnalyzerService;
+        private readonly ITokenUsageService _tokenUsageService = tokenUsageService;
 
         public async Task<ResModel<string>> HandleAsync(VMPromptRequest request, CancellationToken cancellationToken)
         {
-            List<Message> messages = [];
-            if ((request.ContentInput == null || request.ContentInput.Count == 0) && string.IsNullOrWhiteSpace(request.Prompt))
-                throw new ArgumentException("Either prompt or content must be provided");
+            ValidateRequest(request);
 
-            var conversation = await _conversationService.GetConversationAsync(request.ConversationId, cancellationToken);
+            var threadId = await GetOrCreateThreadAsync(request, cancellationToken);
+            if (string.IsNullOrEmpty(threadId))
+                SD.CreateResponse<string>(null, false, $"Thread initialization failed", (int)StatusCode.InternalServerError);
 
-            if (conversation.Success)
-                messages = await _messageService.GetLatestMessagesAsync(conversation.Data.Id, 20, cancellationToken);
+            var messages = await _messageService
+                .GetLatestMessagesAsync(threadId, 20, cancellationToken) ?? [];
 
-            var chatHistory = new ChatHistory();
+            var hasFiles = request.Files?.Count > 0;
+            var prompt = ResolvePrompt(request, hasFiles);
 
-            foreach (var msg in messages.OrderBy(m => m.CreatedAt))
-            {
-                if (msg.Role == ChatRoles.User)
-                    chatHistory.AddUserMessage(msg.Content);
+            await AddUserMessageAsync(threadId, request, prompt, cancellationToken);
 
-                else if (msg.Role == ChatRoles.Assistant)
-                    chatHistory.AddAssistantMessage(msg.Content);
-            }
+            var executionResult = await ExecuteAsync(messages, request, prompt, hasFiles, cancellationToken);
+            if (!executionResult.Success)
+                return SD.CreateResponse(executionResult.Data.Content,executionResult.Success ,executionResult.Message,executionResult.StatusCode);
 
+            await SaveAssistantResponseAsync(threadId, request, executionResult, cancellationToken);
 
-            // Case A: multimodal (text + files)
-            if (request.ContentInput != null && request.ContentInput.Count > 0
-                && !string.IsNullOrWhiteSpace(request.Prompt))
-            {
-                await _messageService.AddMessageAsync(new VMAddMessage()
-                {
-                    ConversationId = conversation.Data.Id,
-                    Role = ChatRoles.User,
-                    Content = request.Prompt,
-                    Model = request.Model
-                }, cancellationToken);
-
-                var result = await _imageAnalyzerService.AnalyzeAsync(messages, request.ContentInput, request.Prompt);
-
-                await _messageService.AddMessageAsync(new VMAddMessage()
-                {
-                    ConversationId = conversation.Data.Id,
-                    Role = ChatRoles.Assistant,
-                    Content = result.Data,
-                    Model = request.Model
-                }, cancellationToken);
-
-                return result;
-            }
-
-            if (request.ContentInput != null && request.ContentInput.Count > 0)
-            {
-                await _messageService.AddMessageAsync(
-                    new VMAddMessage()
-                    {
-                        ConversationId = conversation.Data.Id,
-                        Role = ChatRoles.User,
-                        Content = request.Prompt ?? "Explain this image",
-                        Model = request.Model
-                    }, cancellationToken);
-
-                var result = await _imageAnalyzerService.AnalyzeAsync(messages, request.ContentInput, "Explain this image");
-
-                await _messageService.AddMessageAsync(
-               new VMAddMessage()
-                   {
-                       ConversationId = conversation.Data.Id,
-                       Role = ChatRoles.Assistant,
-                       Content = request.Prompt,
-                       Model = request.Model
-                   }, cancellationToken);
-                return result;
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.Prompt))
-            {
-                await _messageService.AddMessageAsync(
-                    new VMAddMessage()
-                    {
-                        ConversationId = conversation.Data.Id,
-                        Role = ChatRoles.User,
-                        Content = request.Prompt ,
-                        Model = request.Model
-                    }, cancellationToken);
-
-                var result = await _chatService.ExecutePromptAsync(messages,request.Prompt,request.MaxTokens,request.Temperature,cancellationToken);
-
-                await _messageService.AddMessageAsync(
-                   new VMAddMessage()
-                   {
-                       ConversationId = conversation.Data.Id,
-                       Role = ChatRoles.Assistant,
-                       Content = result.Data,
-                       Model = request.Model
-                   }, cancellationToken);
-
-                return result;
-            }
-            return SD.CreateResponse<string>(null, false, " ", (int)StatusCode.BadRequest);
+            return SD.CreateResponse(executionResult.Data.Content, executionResult.Success, executionResult.Message, executionResult.StatusCode);
         }
+
+        public async Task<ResModel> GenerateImageAsync(string prompt, string threadId)
+        {
+             await _imageAnalyzerService.GenerateImageAsync(prompt);
+            return SD.CreateResponse(true, "Image generated SuccessFully", (int)StatusCode.OK);
+        }
+
+        #region Private Helpers
+
+        private static void ValidateRequest(VMPromptRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            if ((request.Files == null || request.Files.Count == 0) && string.IsNullOrWhiteSpace(request.Prompt))
+                throw new ArgumentException("Either prompt or files must be provided");
+        }
+
+        private async Task<string> GetOrCreateThreadAsync(VMPromptRequest request, CancellationToken ct)
+        {
+            if (!string.IsNullOrWhiteSpace(request.ConversationId))
+            {
+                var thread = await _threadService.GetThreadAsync(request.ConversationId, ct);
+                return thread?.Success == true ? request.ConversationId : null;
+            }
+
+            var newThread = await _threadService.AddThreadAsync(new VMAddThread
+            {
+                Title = request.Prompt ?? "New Thread"
+            });
+
+            return newThread?.Success == true ? newThread.Data : null;
+        }
+
+        private static string ResolvePrompt(VMPromptRequest request, bool hasFiles)
+        {
+            if (!string.IsNullOrWhiteSpace(request.Prompt))
+                return request.Prompt;
+
+            return hasFiles ? "Explain this image" : null;
+        }
+
+        private async Task AddUserMessageAsync(string threadId, VMPromptRequest request, string prompt, CancellationToken ct)
+        {
+            await _messageService.AddMessageAsync(new VMAddMessage
+            {
+                ConversationId = threadId,
+                Role = ChatRoles.User,
+                Content = prompt,
+                Model = request.Model,
+                Files = request.Files
+            }, ct);
+        }
+
+        private async Task<ResModel<VMApiResponse>> ExecuteAsync(List<Message> messages, VMPromptRequest request, string prompt, bool hasFiles,CancellationToken ct)
+        {
+            try
+            {
+                if (hasFiles)
+                {
+                    var res = await _imageAnalyzerService.AnalyzeAsync(messages, request.Files, prompt);
+
+                    return MapResponse(res);
+                }
+
+                var chatRes = await _chatService.ExecutePromptAsync(messages,prompt,request.MaxTokens,request.Temperature,ct);
+
+                return MapResponse(chatRes);
+            }
+            catch (Exception ex)
+            {
+               return SD.CreateResponse<VMApiResponse>(null, false, $"Processing failed: {ex.Message}", (int)StatusCode.InternalServerError);
+            }
+        }
+
+        private static ResModel<VMApiResponse> MapResponse(dynamic serviceResponse)
+        {
+            if (serviceResponse == null || !serviceResponse.Success)
+                return SD.CreateResponse<VMApiResponse>(null, false,serviceResponse?.Message ?? "Unknown error",serviceResponse?.StatusCode ?? (int)StatusCode.InternalServerError);
+            
+
+            return new ResModel<VMApiResponse>
+            {
+                Success = true,
+                Data = serviceResponse.Data,
+                Message = serviceResponse.Message,
+                StatusCode = serviceResponse.StatusCode,
+            };
+        }
+
+        private async Task SaveAssistantResponseAsync(string threadId,VMPromptRequest request,ResModel<VMApiResponse> result,CancellationToken ct)
+        {
+            var message = await _messageService.AddMessageAsync(new VMAddMessage
+            {
+                ConversationId = threadId,
+                Role = ChatRoles.Assistant,
+                Content = result.Data.Content ?? string.Empty,
+                Model = request.Model
+            }, ct);
+
+            if (message.Success && result.Data.MetaData is VMAddTokenUsage metaData)
+            {
+                metaData.MessageId = message.Data;
+                await _tokenUsageService.AddTokenUsageAsync(metaData);
+            }
+        }
+        #endregion
     }
 }

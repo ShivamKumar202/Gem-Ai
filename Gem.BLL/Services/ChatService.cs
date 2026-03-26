@@ -1,13 +1,11 @@
-﻿using Azure.Core;
-using Gem.BLL.Common.Utility;
+﻿using Gem.BLL.Common.Utility;
 using Gem.BLL.Interfaces.Services;
 using Gem.COMMON.Enum;
 using Gem.COMMON.ResultModel;
-using Gem.COMMON.Utility;
 using Gem.COMMON.ViewModel.Prompt;
-using Gem.DAL;
+using Gem.COMMON.ViewModel.Response;
+using Gem.COMMON.ViewModel.Token_Usage;
 using Gem.DAL.Domain;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.Google;
@@ -17,43 +15,85 @@ namespace Gem.BLL.Services
 {
     public class ChatService(Kernel kernel) : IChatService
     {
-        private readonly Kernel _kernel = kernel;
+        private readonly IChatCompletionService _chatService = kernel.GetRequiredService<IChatCompletionService>();
 
-        public async Task<ResModel<string>> ExecutePromptAsync(List<Message> messages, string prompt, int? maxTokens, double? temperature = 0.7, CancellationToken cancellationToken = default)
+        public async Task<ResModel<VMApiResponse>> ExecutePromptAsync(List<Message> messages, string prompt, int? maxTokens,  double? temperature = 0.7, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(prompt))
-                throw new ArgumentException("Prompt cannot be empty");
+                return SD.CreateResponse<VMApiResponse>(null, false, "Prompt cannot be empty", (int)StatusCode.BadRequest);
 
-            var chatHistory = new ChatHistory();
-            foreach (var msg in messages)
+            try
             {
-                if (msg.Role == ChatRoles.User)
-                    chatHistory.AddUserMessage(msg.Content);
+                var chatHistory = BuildChatHistory(messages, prompt);
 
-                else if (msg.Role == ChatRoles.Assistant)
-                    chatHistory.AddAssistantMessage(msg.Content);
+                var executionSettings = new GeminiPromptExecutionSettings
+                {
+                    Temperature = temperature,
+                    MaxTokens = maxTokens
+                };
+
+                var stopwatch = Stopwatch.StartNew();
+
+                var result = await _chatService.GetChatMessageContentAsync(
+                    chatHistory,
+                    executionSettings,
+                    cancellationToken: cancellationToken);
+
+                stopwatch.Stop();
+
+                var vmResponse = new VMApiResponse
+                {
+                    Content = result?.Content ?? string.Empty,
+                    MetaData = ExtractTokenUsage(result?.Metadata)
+                };
+
+                return SD.CreateResponse( vmResponse, true,$"Prompt successful ({stopwatch.ElapsedMilliseconds} ms)",(int)StatusCode.OK);
+            }
+            catch (OperationCanceledException)
+            {
+                return SD.CreateResponse<VMApiResponse>(null, false, "Request cancelled", (int)StatusCode.RequestTimeout);
+            }
+            catch (Exception ex)
+            {
+                return SD.CreateResponse<VMApiResponse>(null, false, ex.Message, (int)StatusCode.InternalServerError);
+            }
+        }
+
+        private static ChatHistory BuildChatHistory(List<Message> messages, string prompt)
+        {
+            var chatHistory = new ChatHistory();
+
+            if (messages != null)
+            {
+                foreach (var msg in messages)
+                {
+                    if (msg.Role == ChatRoles.User)
+                        chatHistory.AddUserMessage(msg.Content);
+
+                    else if (msg.Role == ChatRoles.Assistant)
+                        chatHistory.AddAssistantMessage(msg.Content);
+                }
             }
 
             chatHistory.AddUserMessage(prompt);
+            return chatHistory;
+        }
 
-            var stopwatch = Stopwatch.StartNew();
+        private static VMAddTokenUsage ExtractTokenUsage(IReadOnlyDictionary<string, object> metadata)
+        {
+            if (metadata == null)
+                return new VMAddTokenUsage();
 
-            var chatCompletionService = _kernel.GetRequiredService<IChatCompletionService>();
+            int GetValue(string key) => metadata.TryGetValue(key, out var val) && val is int i ? i : 0;
 
-
-            var executionSettings = new GeminiPromptExecutionSettings
+            return new VMAddTokenUsage
             {
-                Temperature = temperature,
-                MaxTokens = maxTokens
+                PromptTokenCount = GetValue("PromptTokenCount"),
+                CachedContentTokenCount = GetValue("CachedContentTokenCount"),
+                CandidatesTokenCount = GetValue("CandidatesTokenCount"),
+                ThoughtsTokenCount = GetValue("ThoughtsTokenCount"),
+                TotalTokenCount = GetValue("TotalTokenCount")
             };
-
-            var result = await chatCompletionService.GetChatMessageContentAsync(chatHistory, executionSettings, cancellationToken: cancellationToken);
-
-            var response = result.Content ?? string.Empty;
-
-
-            stopwatch.Stop();
-            return SD.CreateResponse(response, true, "prompt successfull", (int)StatusCode.OK);
         }
 
         public Task<string> ExecutePromptStreamAsync(VMPromptRequest request, CancellationToken cancellationToken = default)

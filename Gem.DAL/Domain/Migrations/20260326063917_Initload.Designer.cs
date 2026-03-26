@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Gem.DAL.Migrations
 {
     [DbContext(typeof(GemContext))]
-    [Migration("20260325074932_SetCreatedAtColumnMessage")]
-    partial class SetCreatedAtColumnMessage
+    [Migration("20260326063917_Initload")]
+    partial class Initload
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -108,7 +108,7 @@ namespace Gem.DAL.Migrations
                     b.ToTable("AspNetUsers", (string)null);
                 });
 
-            modelBuilder.Entity("Gem.DAL.Domain.Conversations", b =>
+            modelBuilder.Entity("Gem.DAL.Domain.Attachment", b =>
                 {
                     b.Property<string>("Id")
                         .HasColumnType("nvarchar(450)");
@@ -116,23 +116,26 @@ namespace Gem.DAL.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Title")
+                    b.PrimitiveCollection<string>("Embedding")
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("datetime2");
+                    b.Property<string>("FileName")
+                        .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("UserId")
+                    b.Property<string>("MessageId")
                         .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("MimeType")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Url")
+                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("MessageId");
 
-                    b.ToTable("Conversations");
+                    b.ToTable("Attachment");
                 });
 
             modelBuilder.Entity("Gem.DAL.Domain.ExceptionLog", b =>
@@ -177,9 +180,6 @@ namespace Gem.DAL.Migrations
                     b.Property<string>("Content")
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("ConversationId")
-                        .HasColumnType("nvarchar(450)");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
@@ -189,14 +189,44 @@ namespace Gem.DAL.Migrations
                     b.Property<int>("Role")
                         .HasColumnType("int");
 
+                    b.Property<string>("ThreadId")
+                        .HasColumnType("nvarchar(450)");
+
                     b.Property<int>("TokenUsed")
                         .HasColumnType("int");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ConversationId");
+                    b.HasIndex("ThreadId");
 
                     b.ToTable("Message");
+                });
+
+            modelBuilder.Entity("Gem.DAL.Domain.Thread", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UserId")
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("Thread");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
@@ -332,22 +362,31 @@ namespace Gem.DAL.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
-            modelBuilder.Entity("Gem.DAL.Domain.Conversations", b =>
+            modelBuilder.Entity("Gem.DAL.Domain.Attachment", b =>
+                {
+                    b.HasOne("Gem.DAL.Domain.Message", "Message")
+                        .WithMany()
+                        .HasForeignKey("MessageId");
+
+                    b.Navigation("Message");
+                });
+
+            modelBuilder.Entity("Gem.DAL.Domain.Message", b =>
+                {
+                    b.HasOne("Gem.DAL.Domain.Thread", "Thread")
+                        .WithMany()
+                        .HasForeignKey("ThreadId");
+
+                    b.Navigation("Thread");
+                });
+
+            modelBuilder.Entity("Gem.DAL.Domain.Thread", b =>
                 {
                     b.HasOne("Gem.DAL.Domain.ApplicationUser", "ApplicationUser")
                         .WithMany()
                         .HasForeignKey("UserId");
 
                     b.Navigation("ApplicationUser");
-                });
-
-            modelBuilder.Entity("Gem.DAL.Domain.Message", b =>
-                {
-                    b.HasOne("Gem.DAL.Domain.Conversations", "Conversations")
-                        .WithMany()
-                        .HasForeignKey("ConversationId");
-
-                    b.Navigation("Conversations");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

@@ -2,7 +2,7 @@
 
 namespace Gem.DAL.Domain
 {
-    public class Conversations
+    public class Thread
     {
         public string Id { get; private set; } = Guid.NewGuid().ToString();
         public string Title { get; set; }

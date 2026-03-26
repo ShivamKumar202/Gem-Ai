@@ -1,7 +1,6 @@
 ﻿using Gem.BLL.Interfaces.Services;
 using Google.GenAI;
 using Google.GenAI.Types;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.SemanticKernel;
 

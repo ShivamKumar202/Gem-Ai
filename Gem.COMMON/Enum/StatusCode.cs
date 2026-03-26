@@ -36,6 +36,12 @@ namespace Gem.COMMON.Enum
         BadGateway = 502,
 
         [Description("ServiceUnavailable")]
-        ServiceUnavailable = 503
+        ServiceUnavailable = 503,
+
+       [Description("RequestTimeout")]
+        RequestTimeout = 408,
+
+        [Description("Operation Canceled")]
+        OperationCanceled=499
     }
 }

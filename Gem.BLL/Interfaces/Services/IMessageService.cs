@@ -6,9 +6,9 @@ namespace Gem.BLL.Interfaces.Services
 {
     public interface IMessageService
     {
-        Task<ResModel> AddMessageAsync(VMAddMessage vmAddMessage,CancellationToken cancellationToken =default);
+        Task<ResModel<string>> AddMessageAsync(VMAddMessage vmAddMessage,CancellationToken cancellationToken =default);
         Task<ResModel> DeleteMessageAsync();
-        Task<List<Message>> GetLatestMessagesAsync(string conversationId,int size, CancellationToken cancellationToken);
+        Task<List<Message>> GetLatestMessagesAsync(string threadId,int size, CancellationToken cancellationToken);
         //Task<ResListModel<>> GetMessages(string conversationId);
     }
 }
