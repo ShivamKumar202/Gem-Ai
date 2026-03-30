@@ -1,14 +1,14 @@
-﻿using Gem.COMMON.ResultModel;
-using Gem.COMMON.ViewModel.Response;
-using Gem.DAL.Domain;
-using Google.GenAI.Types;
-using Microsoft.AspNetCore.Http;
+﻿using Google.GenAI.Types;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.TextToImage;
 
 namespace Gem.BLL.Interfaces.Services
 {
-    public interface IImageAnalyzerService
+    public interface IImageAnalyzerService:ITextToImageService
     {
-        Task<ResModel<VMApiResponse>> AnalyzeAsync(List<Message> messages, List<IFormFile> files, string prompt, CancellationToken ct = default);
-        Task GenerateImageAsync(string prompt, int width = 512, int height = 512, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<ImageContent>> GenerateImageAsync(string prompt, CancellationToken ct = default);
+        Task<IReadOnlyList<Image>> UpscaleImageAsync(byte[] imageData, string mimeType, string factor = "x2", CancellationToken ct = default);
+        Task<IReadOnlyList<Image>> EditImageAsync(List<(byte[] Data, string MimeType)> images, string editPrompt, CancellationToken ct = default);
+        Task<string> DescribeImageAsync(byte[] imageData, string mimeType, CancellationToken ct=default);
     }
 }

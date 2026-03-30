@@ -3,8 +3,6 @@ using Gem.BLL.Interfaces.Services;
 using Gem.COMMON.Enum;
 using Gem.COMMON.ResultModel;
 using Gem.COMMON.ViewModel.Prompt;
-using Gem.COMMON.ViewModel.Response;
-using Gem.COMMON.ViewModel.Token_Usage;
 using Gem.DAL.Domain;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
@@ -17,88 +15,117 @@ namespace Gem.BLL.Services
     {
         private readonly IChatCompletionService _chatService = kernel.GetRequiredService<IChatCompletionService>();
 
-        public async Task<ResModel<VMApiResponse>> ExecutePromptAsync(List<Message> messages, string prompt, int? maxTokens,  double? temperature = 0.7, CancellationToken cancellationToken = default)
+        public async Task<ResModel<ChatMessageContent>> ExecutePromptAsync( List<Message> messages, VMPromptRequest request,CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(prompt))
-                return SD.CreateResponse<VMApiResponse>(null, false, "Prompt cannot be empty", (int)StatusCode.BadRequest);
-
             try
             {
-                var chatHistory = BuildChatHistory(messages, prompt);
+                var chatHistory = BuildChatHistory(messages, request.Prompt);
+                var userMessage = await BuildUserMessageAsync(request, cancellationToken).ConfigureAwait(false);
 
-                var executionSettings = new GeminiPromptExecutionSettings
+                chatHistory.Add(userMessage);
+
+                var settings = new GeminiPromptExecutionSettings
                 {
-                    Temperature = temperature,
-                    MaxTokens = maxTokens
+                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
                 };
 
                 var stopwatch = Stopwatch.StartNew();
-
-                var result = await _chatService.GetChatMessageContentAsync(
-                    chatHistory,
-                    executionSettings,
-                    cancellationToken: cancellationToken);
-
+                var response = await _chatService.GetChatMessageContentAsync(chatHistory, settings, kernel, cancellationToken).ConfigureAwait(false);
                 stopwatch.Stop();
 
-                var vmResponse = new VMApiResponse
-                {
-                    Content = result?.Content ?? string.Empty,
-                    MetaData = ExtractTokenUsage(result?.Metadata)
-                };
-
-                return SD.CreateResponse( vmResponse, true,$"Prompt successful ({stopwatch.ElapsedMilliseconds} ms)",(int)StatusCode.OK);
+                return SD.CreateResponse(response, true, $"Prompt successful ({stopwatch.ElapsedMilliseconds} ms)", (int)StatusCode.OK);
             }
             catch (OperationCanceledException)
             {
-                return SD.CreateResponse<VMApiResponse>(null, false, "Request cancelled", (int)StatusCode.RequestTimeout);
+                return SD.CreateResponse<ChatMessageContent>(null, false, "Request cancelled", (int)StatusCode.RequestTimeout);
             }
             catch (Exception ex)
             {
-                return SD.CreateResponse<VMApiResponse>(null, false, ex.Message, (int)StatusCode.InternalServerError);
+                return SD.CreateResponse<ChatMessageContent>(null, false, ex.Message, (int)StatusCode.InternalServerError);
             }
         }
+
+        public async Task<string> ExecutePromptStreamAsync(VMPromptRequest request, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var chatHistory = BuildChatHistory([], request.Prompt);
+                var userMessage = await BuildUserMessageAsync(request, cancellationToken).ConfigureAwait(false);
+
+                chatHistory.Add(userMessage);
+
+                var settings = new GeminiPromptExecutionSettings
+                {
+                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
+                };
+
+                await foreach (var chunk in _chatService.GetStreamingChatMessageContentsAsync(chatHistory, settings, kernel, cancellationToken).ConfigureAwait(false))
+                {
+                    if (!string.IsNullOrWhiteSpace(chunk.Content))
+                        return chunk.Content; 
+                }
+
+                return string.Empty;
+            }
+            catch (OperationCanceledException)
+            {
+                return "Request cancelled";
+            }
+            catch (Exception ex)
+            {
+                return $"Streaming failed: {ex.Message}";
+            }
+        }
+
+        #region Private Helpers
 
         private static ChatHistory BuildChatHistory(List<Message> messages, string prompt)
         {
             var chatHistory = new ChatHistory();
 
-            if (messages != null)
+            if (messages is { Count: > 0 })
             {
                 foreach (var msg in messages)
                 {
                     if (msg.Role == ChatRoles.User)
                         chatHistory.AddUserMessage(msg.Content);
-
                     else if (msg.Role == ChatRoles.Assistant)
                         chatHistory.AddAssistantMessage(msg.Content);
                 }
             }
 
-            chatHistory.AddUserMessage(prompt);
+            if (!string.IsNullOrWhiteSpace(prompt))
+                chatHistory.AddUserMessage(prompt);
+
             return chatHistory;
         }
 
-        private static VMAddTokenUsage ExtractTokenUsage(IReadOnlyDictionary<string, object> metadata)
+        private static async Task<ChatMessageContent> BuildUserMessageAsync(VMPromptRequest request, CancellationToken ct)
         {
-            if (metadata == null)
-                return new VMAddTokenUsage();
+            var message = new ChatMessageContent(AuthorRole.User, request.Prompt);
 
-            int GetValue(string key) => metadata.TryGetValue(key, out var val) && val is int i ? i : 0;
-
-            return new VMAddTokenUsage
+            if (request.Files is { Count: > 0 })
             {
-                PromptTokenCount = GetValue("PromptTokenCount"),
-                CachedContentTokenCount = GetValue("CachedContentTokenCount"),
-                CandidatesTokenCount = GetValue("CandidatesTokenCount"),
-                ThoughtsTokenCount = GetValue("ThoughtsTokenCount"),
-                TotalTokenCount = GetValue("TotalTokenCount")
-            };
-        }
+                foreach (var file in request.Files)
+                {
+                    using var ms = new MemoryStream();
+                    await file.CopyToAsync(ms, ct).ConfigureAwait(false);
+                    var data = ms.ToArray();
 
-        public Task<string> ExecutePromptStreamAsync(VMPromptRequest request, CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
+                    var contentType = file.ContentType.ToLowerInvariant();
+
+                    message.Items.Add(contentType switch
+                    {
+                        var type when type.StartsWith("image/") => new ImageContent(data, contentType),
+                        var type when type.StartsWith("video/") => new BinaryContent(data, contentType),
+                        var type when type.StartsWith("audio/") => new AudioContent(data, contentType),
+                        _ => throw new NotSupportedException($"Unsupported file type: {contentType}")
+                    });
+                }
+            }
+
+            return message;
         }
+        #endregion
     }
 }

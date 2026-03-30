@@ -16,7 +16,7 @@ namespace Gem.BLL.Services
 
         public async Task<ResModel> AddAttachmentsAsync(List<VMAddAttachment> attachments)
         {
-            if (attachments == null || attachments.Count == 0)
+            if (attachments is null || attachments.Count == 0)
                 return SD.CreateResponse(false, Messages.NO_ATTACHMENT, (int)StatusCode.BadRequest);
 
             var savedAttachments = new List<Attachment>();
@@ -28,30 +28,13 @@ namespace Gem.BLL.Services
                     if (string.IsNullOrWhiteSpace(vmFile.FileName))
                         return SD.CreateResponse(false, "File name is required", (int)StatusCode.BadRequest);
 
-                    byte[] fileData;
+                    var fileData = await ExtractFileDataAsync(vmFile).ConfigureAwait(false);
+                    if (fileData is null || fileData.Length == 0)
+                        return SD.CreateResponse(false, "Invalid or empty file", (int)StatusCode.BadRequest);
 
-                    if (vmFile.File is not null)
-                    {
-                        using var ms = new MemoryStream();
-                        await vmFile.File.CopyToAsync(ms);
-                        fileData = ms.ToArray();
-                    }
-                    else if (vmFile.Data is not null)
-                    {
-                        fileData = vmFile.Data;
-                    }
-                    else
-                    {
-                        return SD.CreateResponse(false, Messages.ATTACHMENT_INVALID, (int)StatusCode.BadRequest);
-                    }
-
-                    if (fileData.Length == 0)
-                        return SD.CreateResponse(false, "Empty file", (int)StatusCode.BadRequest);
-
-                    var fileUrl = await _fileStorageService.SaveFileAsync(
-                        vmFile.FileName,
-                        fileData,
-                        vmFile.MimeType);
+                    var fileUrl = await _fileStorageService
+                        .SaveFileAsync(vmFile.FileName, fileData, vmFile.MimeType)
+                        .ConfigureAwait(false);
 
                     var attachment = new Attachment
                     {
@@ -62,18 +45,34 @@ namespace Gem.BLL.Services
                         Embedding = vmFile.Embedding
                     };
 
-                    await _context.Attachment.AddAsync(attachment);
+                    await _context.Attachment.AddAsync(attachment).ConfigureAwait(false);
                     savedAttachments.Add(attachment);
                 }
 
-                await _context.SaveChangesAsync();
+                await _context.SaveChangesAsync().ConfigureAwait(false);
 
-                return SD.CreateResponse(true,Messages.ATTACHMENT_SUCCESS,(int)StatusCode.OK);
+                return SD.CreateResponse(true, Messages.ATTACHMENT_SUCCESS, (int)StatusCode.OK);
             }
             catch (Exception ex)
             {
-                return SD.CreateResponse(false, ex.Message,(int)StatusCode.InternalServerError);
+                return SD.CreateResponse(false, ex.Message, (int)StatusCode.InternalServerError);
             }
         }
+
+        #region Private Helpers
+
+        private static async Task<byte[]> ExtractFileDataAsync(VMAddAttachment vmFile)
+        {
+            if (vmFile.File is not null)
+            {
+                using var ms = new MemoryStream();
+                await vmFile.File.CopyToAsync(ms).ConfigureAwait(false);
+                return ms.ToArray();
+            }
+
+            return vmFile.Data;
+        }
+
+        #endregion
     }
 }

@@ -15,11 +15,5 @@ namespace Gem.API.Controllers
         {
             return Ok(await _aiOrchestratorService.HandleAsync(request, HttpContext.RequestAborted));
         }
-
-        [HttpPost("generateImage")]
-        public async Task<IActionResult> GenerateImageAsync([FromBody] string prompt)
-        {
-            return Ok(await _aiOrchestratorService.GenerateImageAsync(prompt,null));
-        }
     }
 }

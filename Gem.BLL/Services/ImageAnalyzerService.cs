@@ -1,216 +1,107 @@
-﻿using Gem.BLL.Common.Utility;
-using Gem.BLL.Interfaces.Services;
-using Gem.COMMON.Enum;
-using Gem.COMMON.ResultModel;
-using Gem.COMMON.Utility;
-using Gem.COMMON.ViewModel.Response;
-using Gem.COMMON.ViewModel.Token_Usage;
-using Gem.DAL.Domain;
+﻿using Gem.BLL.Interfaces.Services;
 using Google.GenAI;
 using Google.GenAI.Types;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
-using System.Text;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace Gem.BLL.Services
 {
     public class ImageAnalyzerService(IConfiguration configuration) : IImageAnalyzerService
     {
         private readonly Client _client = new(apiKey: configuration["GoogleAI:ApiKey"]);
-        private readonly string _model = configuration["GoogleAI:Model"];
+        private readonly string _generateModel = configuration["GoogleAI:Model"];
+        private readonly string _upscaleModel = configuration["GoogleAI:Model"];
+        private readonly string _editModel = configuration["GoogleAI:Model"];
 
-        public async Task<ResModel<VMApiResponse>> AnalyzeAsync(List<Message> messages, List<IFormFile> files, string prompt, CancellationToken ct = default)
+        public IReadOnlyDictionary<string, object> Attributes => new Dictionary<string, object>();
+
+        // Generate
+        public async Task<IReadOnlyList<ImageContent>> GenerateImageAsync(string prompt, CancellationToken ct = default)
         {
-            if ((files == null || files.Count == 0) && string.IsNullOrWhiteSpace(prompt))
+            var config = new GenerateImagesConfig
             {
-                return SD.CreateResponse<VMApiResponse>(null, false, "No input provided", (int)StatusCode.BadRequest);
-            }
+                NumberOfImages = 1,
+                AspectRatio = "1:1",
+                SafetyFilterLevel = SafetyFilterLevel.BlockLowAndAbove,
+                PersonGeneration = PersonGeneration.DontAllow,
+                IncludeSafetyAttributes = true,
+                IncludeRaiReason = true,
+                OutputMimeType = "image/jpeg",
+            };
 
-            try
+            var response = await _client.Models.GenerateImagesAsync(_generateModel, prompt, config, ct);
+            return response.GeneratedImages .Select(img => new ImageContent(img.Image.ImageBytes, img.Image.MimeType)) .ToList();
+
+        }
+
+        // Upscale
+        public async Task<IReadOnlyList<Image>> UpscaleImageAsync(byte[] imageData, string mimeType, string factor = "x2", CancellationToken ct = default)
+        {
+            var config = new UpscaleImageConfig { OutputMimeType = mimeType, EnhanceInputImage = true };
+            Image image = new()
             {
-                var contents = BuildContents(messages, files, prompt, ct);
+                MimeType = mimeType,
+                ImageBytes = imageData,
+            };
 
-                var response = await _client.Models.GenerateContentAsync(
-                    model: _model,
-                    contents: contents,
-                    cancellationToken: ct);
+            var response = await _client.Models.UpscaleImageAsync(_upscaleModel, image, factor, config, ct);
+            return [.. response.GeneratedImages.Select(x=>x.Image)];
+        }
 
-                var vmResponse = new VMApiResponse
+        // Edit
+        public async Task<IReadOnlyList<Image>> EditImageAsync(List<(byte[] Data, string MimeType)> images, string editPrompt, CancellationToken ct = default)
+        {
+            var referenceImages = new List<IReferenceImage>();
+
+            int id = 1;
+            foreach (var (data, mime) in images)
+            {
+                var rawReferenceImage = new RawReferenceImage
                 {
-                    Content = ExtractText(response),
-                    MetaData = ExtractTokenUsage(response?.UsageMetadata)
+                    ReferenceImage = new Image
+                    {
+                        ImageBytes = data,
+                        MimeType = mime
+                    },
+                    ReferenceId = id
                 };
+                referenceImages.Add(rawReferenceImage);
+                id++;
+            }
+            var editConfig = new EditImageConfig
+            {
+                EditMode = EditMode.EditModeInpaintInsertion,
+                NumberOfImages = images.Count,
+                OutputMimeType = "image/jpeg"
+            };
 
-                return SD.CreateResponse(vmResponse, true, Messages.ANALYSIS_SUCCESS, (int)StatusCode.OK);
-            }
-            catch (OperationCanceledException)
-            {
-                return SD.CreateResponse<VMApiResponse>(null, false, "Request cancelled", 499);
-            }
-            catch (Exception ex)
-            {
-                return SD.CreateResponse<VMApiResponse>(null, false, ex.Message, (int)StatusCode.InternalServerError);
-            }
+            var response = await _client.Models.EditImageAsync(_editModel, editPrompt, referenceImages,cancellationToken: ct);
+            return [.. response.GeneratedImages.Select(x => x.Image)];
         }
 
-        public async Task GenerateImageAsync(string prompt, int width = 512, int height = 512, CancellationToken cancellationToken = default)
+        // Describe (text output)
+        public async Task<string> DescribeImageAsync(byte[] imageData, string mimeType, CancellationToken ct = default)
         {
-            var model = "gemini-2.5-flash-image";
             var contents = new List<Content>
-        {
-            new Content
             {
-                Role = "user",
-                Parts = new List<Part>
-                {
-                    new Part { Text = "INSERT_INPUT_HERE" },
-                }
-            },
-        };
-
-
-
-            var config = new GenerateContentConfig
-            {
-                ResponseModalities = new List<string>
-            {
-                "IMAGE",
-                "TEXT"
-            },
+                new() { Role = AuthorRole.User.ToString(), Parts = [
+                    new Part { Text = "Describe this image" },
+                    new Part { InlineData = new () { Data = imageData, MimeType = mimeType } }
+                ]}
             };
 
-            int fileIndex = 0;
-            await foreach (var chunk in _client.Models.GenerateContentStreamAsync(model, contents, config))
-            {
-                if (chunk.Candidates == null || chunk.Candidates.Count == 0 ||
-                    chunk.Candidates[0].Content?.Parts == null)
-                {
-                    continue;
-                }
-                var part = chunk.Candidates[0].Content.Parts[0];
-                if (part.InlineData?.Data != null)
-                {
-                    var fileName = $"ENTER_FILE_NAME_{fileIndex}";
-                    fileIndex++;
-                    var inlineData = part.InlineData;
-                    var dataBuffer = inlineData.Data;
-                    var fileExtension = GetFileExtension(inlineData.MimeType);
-                    SaveBinaryFile($"{fileName}{fileExtension}", dataBuffer);
-                }
-                else
-                {
-                    Console.WriteLine(chunk);
-                }
-            }
+            var config = new GenerateContentConfig { ResponseModalities = ["TEXT"] };
+            var response = await _client.Models.GenerateContentAsync(_editModel, contents, config, ct);
+
+            return response.Candidates.SelectMany(c => c.Content.Parts).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.Text))?.Text ?? "No description generated.";
         }
 
-        #region Methods
-        private static List<Content> BuildContents(List<Message> messages, List<IFormFile> files, string prompt, CancellationToken ct)
+        // Required by ITextToImageService
+        public async Task<IReadOnlyList<ImageContent>> GetImageContentsAsync(TextContent input, PromptExecutionSettings executionSettings = null, Kernel kernel = null, CancellationToken cancellationToken = default)
         {
-            var contents = new List<Content>();
-
-            if (messages != null)
-            {
-                foreach (var msg in messages.OrderBy(m => m.CreatedAt))
-                {
-                    contents.Add(new Content
-                    {
-                        Role = msg.Role.ToString().ToLower(),
-                        Parts =
-                        [
-                            new() { Text = msg.Content }
-                        ]
-                    });
-                }
-            }
-
-            var currentParts = new List<Part>();
-
-            if (!string.IsNullOrWhiteSpace(prompt))
-                currentParts.Add(new Part { Text = prompt });
-
-            if (files != null && files.Count > 0)
-            {
-                foreach (var file in files)
-                {
-                    using var ms = new MemoryStream();
-                    file.CopyTo(ms);
-
-                    currentParts.Add(new Part
-                    {
-                        InlineData = new Blob
-                        {
-                            MimeType = file.ContentType,
-                            Data = ms.ToArray()
-                        }
-                    });
-                }
-            }
-
-            contents.Add(new Content
-            {
-                Role = ChatRoles.User.ToString().ToLower(),
-                Parts = currentParts
-            });
-
-            return contents;
+            return await GenerateImageAsync(input.Text, cancellationToken);
         }
-
-        private static string ExtractText(GenerateContentResponse response)
-        {
-            if (response?.Candidates == null)
-                return string.Empty;
-
-            var sb = new StringBuilder();
-
-            foreach (var candidate in response.Candidates)
-            {
-                var parts = candidate.Content?.Parts;
-                if (parts == null) continue;
-
-                foreach (var part in parts)
-                {
-                    if (!string.IsNullOrWhiteSpace(part.Text))
-                        sb.AppendLine(part.Text);
-                }
-            }
-
-            return sb.ToString().Trim();
-        }
-
-        private static VMAddTokenUsage ExtractTokenUsage(GenerateContentResponseUsageMetadata meta)
-        {
-            if (meta == null)
-                return new VMAddTokenUsage();
-
-            return new VMAddTokenUsage
-            {
-                PromptTokenCount = meta.PromptTokenCount,
-                CachedContentTokenCount = meta.CachedContentTokenCount,
-                ThoughtsTokenCount = meta.ThoughtsTokenCount,
-                CandidatesTokenCount = meta.CandidatesTokenCount,
-                ToolUsePromptTokenCount = meta.ToolUsePromptTokenCount,
-                TotalTokenCount = meta.TotalTokenCount
-            };
-        }
-
-        static string GetFileExtension(string mimeType)
-        {
-            return mimeType switch
-            {
-                "image/jpeg" => ".jpg",
-                "image/png" => ".png",
-                "audio/wav" => ".wav",
-                "audio/mpeg" => ".mp3",
-                _ => ".bin"
-            };
-        }
-
-        static void SaveBinaryFile(string fileName, byte[] data)
-        {
-            System.IO.File.WriteAllBytes(fileName, data);
-            Console.WriteLine($"File saved to: {fileName}");
-        }
-        #endregion
     }
+
 }

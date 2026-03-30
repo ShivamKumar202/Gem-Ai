@@ -15,15 +15,16 @@ namespace Gem.API.Helpers.Utility
             // Services
             services.AddScoped<IThreadService, ThreadService>();
             services.AddScoped<ILogExceptionServices, ExceptionLogService>();
-            services.AddScoped<IImgGenerationService, ImageGenerationService>();
             services.AddScoped<IUserContextService, UserContextService>();
             services.AddScoped<IChatService, ChatService>();
             services.AddScoped<ITokenUsageService, TokenUsageService>();
+            services.AddSingleton<IImageAnalyzerService,ImageAnalyzerService>();
+            services.AddSingleton<IAudioAnalyzerService, AudioAnalyzerService>();
+
 
 
             services.AddScoped<IMessageService, MessageService>();
             services.AddScoped<IAttachementService, AttachementService>();
-            services.AddScoped<IImageAnalyzerService, ImageAnalyzerService>();
             services.AddScoped<IFileStorageService,FileStorageService>();
 
             // Orchestors

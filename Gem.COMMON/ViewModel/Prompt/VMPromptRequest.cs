@@ -8,6 +8,6 @@ namespace Gem.COMMON.ViewModel.Prompt
         public int? MaxTokens { get; set; }
         public double? Temperature { get; set; }
         public string Model { get; set; }
-        public List<IFormFile> Files { get; set; }
+        public List<IFormFile> Files { get; set; } = [];
     }
 }

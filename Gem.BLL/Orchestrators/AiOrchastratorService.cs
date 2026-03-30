@@ -9,47 +9,41 @@ using Gem.COMMON.ViewModel.Response;
 using Gem.COMMON.ViewModel.Thread;
 using Gem.COMMON.ViewModel.Token_Usage;
 using Gem.DAL.Domain;
-using Google.GenAI.Types;
+using Microsoft.SemanticKernel;
 
 namespace Gem.BLL.Orchestrators
 {
-    public class AiOrchestratorService(IChatService chatService, IThreadService threadService, IMessageService messageService, IImageAnalyzerService imageAnalyzerService, ITokenUsageService tokenUsageService) : IAiOrchestratorService
+    public class AiOrchestratorService(IChatService chatService, IThreadService threadService, IMessageService messageService, ITokenUsageService tokenUsageService) : IAiOrchestratorService
     {
         private readonly IChatService _chatService = chatService;
         private readonly IThreadService _threadService = threadService;
         private readonly IMessageService _messageService = messageService;
-        private readonly IImageAnalyzerService _imageAnalyzerService = imageAnalyzerService;
         private readonly ITokenUsageService _tokenUsageService = tokenUsageService;
 
-        public async Task<ResModel<string>> HandleAsync(VMPromptRequest request, CancellationToken cancellationToken)
+        public async Task<ResModel<VMApiResponse>> HandleAsync(VMPromptRequest request, CancellationToken cancellationToken)
         {
             ValidateRequest(request);
 
             var threadId = await GetOrCreateThreadAsync(request, cancellationToken);
             if (string.IsNullOrEmpty(threadId))
-                SD.CreateResponse<string>(null, false, $"Thread initialization failed", (int)StatusCode.InternalServerError);
+                return SD.CreateResponse<VMApiResponse>(null, false, "Thread initialization failed", (int)StatusCode.InternalServerError);
 
-            var messages = await _messageService
-                .GetLatestMessagesAsync(threadId, 20, cancellationToken) ?? [];
+            var messages = await _messageService.GetLatestMessagesAsync(threadId, 20, cancellationToken) ?? [];
 
-            var hasFiles = request.Files?.Count > 0;
-            var prompt = ResolvePrompt(request, hasFiles);
-
+            var prompt = ResolvePrompt(request);
             await AddUserMessageAsync(threadId, request, prompt, cancellationToken);
 
-            var executionResult = await ExecuteAsync(messages, request, prompt, hasFiles, cancellationToken);
+            var executionResult = await ExecuteAsync(messages, request, cancellationToken);
             if (!executionResult.Success)
-                return SD.CreateResponse(executionResult.Data.Content,executionResult.Success ,executionResult.Message,executionResult.StatusCode);
+                return SD.CreateResponse<VMApiResponse>(null, false, executionResult.Message, executionResult.StatusCode);
 
             await SaveAssistantResponseAsync(threadId, request, executionResult, cancellationToken);
 
-            return SD.CreateResponse(executionResult.Data.Content, executionResult.Success, executionResult.Message, executionResult.StatusCode);
-        }
-
-        public async Task<ResModel> GenerateImageAsync(string prompt, string threadId)
-        {
-             await _imageAnalyzerService.GenerateImageAsync(prompt);
-            return SD.CreateResponse(true, "Image generated SuccessFully", (int)StatusCode.OK);
+            return SD.CreateResponse(new VMApiResponse
+            {
+                ThreadId = threadId,
+                MetaData = executionResult.Data
+            }, true, executionResult.Message, executionResult.StatusCode);
         }
 
         #region Private Helpers
@@ -58,11 +52,11 @@ namespace Gem.BLL.Orchestrators
         {
             ArgumentNullException.ThrowIfNull(request);
 
-            if ((request.Files == null || request.Files.Count == 0) && string.IsNullOrWhiteSpace(request.Prompt))
+            if (string.IsNullOrWhiteSpace(request.Prompt) && (request.Files?.Count ?? 0) == 0)
                 throw new ArgumentException("Either prompt or files must be provided");
         }
 
-        private async Task<string> GetOrCreateThreadAsync(VMPromptRequest request, CancellationToken ct)
+        private async Task<string?> GetOrCreateThreadAsync(VMPromptRequest request, CancellationToken ct)
         {
             if (!string.IsNullOrWhiteSpace(request.ConversationId))
             {
@@ -78,17 +72,11 @@ namespace Gem.BLL.Orchestrators
             return newThread?.Success == true ? newThread.Data : null;
         }
 
-        private static string ResolvePrompt(VMPromptRequest request, bool hasFiles)
-        {
-            if (!string.IsNullOrWhiteSpace(request.Prompt))
-                return request.Prompt;
+        private static string ResolvePrompt(VMPromptRequest request) =>
+            !string.IsNullOrWhiteSpace(request.Prompt)? request.Prompt  : (request.Files?.Count > 0 ? "Explain this image" : string.Empty);
 
-            return hasFiles ? "Explain this image" : null;
-        }
-
-        private async Task AddUserMessageAsync(string threadId, VMPromptRequest request, string prompt, CancellationToken ct)
-        {
-            await _messageService.AddMessageAsync(new VMAddMessage
+        private Task AddUserMessageAsync(string threadId, VMPromptRequest request, string prompt, CancellationToken ct) =>
+            _messageService.AddMessageAsync(new VMAddMessage
             {
                 ConversationId = threadId,
                 Role = ChatRoles.User,
@@ -96,45 +84,35 @@ namespace Gem.BLL.Orchestrators
                 Model = request.Model,
                 Files = request.Files
             }, ct);
-        }
 
-        private async Task<ResModel<VMApiResponse>> ExecuteAsync(List<Message> messages, VMPromptRequest request, string prompt, bool hasFiles,CancellationToken ct)
+        private async Task<ResModel<ChatMessageContent>> ExecuteAsync(List<Message> messages, VMPromptRequest request, CancellationToken ct)
         {
             try
             {
-                if (hasFiles)
-                {
-                    var res = await _imageAnalyzerService.AnalyzeAsync(messages, request.Files, prompt);
-
-                    return MapResponse(res);
-                }
-
-                var chatRes = await _chatService.ExecutePromptAsync(messages,prompt,request.MaxTokens,request.Temperature,ct);
-
+                var chatRes = await _chatService.ExecutePromptAsync(messages, request, ct);
                 return MapResponse(chatRes);
             }
             catch (Exception ex)
             {
-               return SD.CreateResponse<VMApiResponse>(null, false, $"Processing failed: {ex.Message}", (int)StatusCode.InternalServerError);
+                return SD.CreateResponse<ChatMessageContent>(null, false, $"Processing failed: {ex.Message}", (int)StatusCode.InternalServerError);
             }
         }
 
-        private static ResModel<VMApiResponse> MapResponse(dynamic serviceResponse)
+        private static ResModel<ChatMessageContent> MapResponse(dynamic serviceResponse)
         {
-            if (serviceResponse == null || !serviceResponse.Success)
-                return SD.CreateResponse<VMApiResponse>(null, false,serviceResponse?.Message ?? "Unknown error",serviceResponse?.StatusCode ?? (int)StatusCode.InternalServerError);
-            
+            if (serviceResponse is null || serviceResponse.Success is not true)
+                return SD.CreateResponse<ChatMessageContent>(null, false, serviceResponse?.Message ?? "Unknown error", serviceResponse?.StatusCode ?? (int)StatusCode.InternalServerError);
 
-            return new ResModel<VMApiResponse>
+            return new ResModel<ChatMessageContent>
             {
                 Success = true,
                 Data = serviceResponse.Data,
                 Message = serviceResponse.Message,
-                StatusCode = serviceResponse.StatusCode,
+                StatusCode = serviceResponse.StatusCode
             };
         }
 
-        private async Task SaveAssistantResponseAsync(string threadId,VMPromptRequest request,ResModel<VMApiResponse> result,CancellationToken ct)
+        private async Task SaveAssistantResponseAsync(string threadId, VMPromptRequest request, ResModel<ChatMessageContent> result, CancellationToken ct)
         {
             var message = await _messageService.AddMessageAsync(new VMAddMessage
             {
@@ -144,12 +122,30 @@ namespace Gem.BLL.Orchestrators
                 Model = request.Model
             }, ct);
 
-            if (message.Success && result.Data.MetaData is VMAddTokenUsage metaData)
+            if (message.Success)
             {
+                var metaData = ExtractTokenUsage(result.Data.Metadata);
                 metaData.MessageId = message.Data;
-                await _tokenUsageService.AddTokenUsageAsync(metaData);
+                await _tokenUsageService.AddTokenUsageAsync(metaData, ct);
             }
         }
+
+        private static VMAddTokenUsage ExtractTokenUsage(IReadOnlyDictionary<string, object>? metadata)
+        {
+            if (metadata is null) return new VMAddTokenUsage();
+
+            int GetValue(string key) => metadata.TryGetValue(key, out var val) && val is int i ? i : 0;
+
+            return new VMAddTokenUsage
+            {
+                PromptTokenCount = GetValue("PromptTokenCount"),
+                CachedContentTokenCount = GetValue("CachedContentTokenCount"),
+                CandidatesTokenCount = GetValue("CandidatesTokenCount"),
+                ThoughtsTokenCount = GetValue("ThoughtsTokenCount"),
+                TotalTokenCount = GetValue("TotalTokenCount")
+            };
+        }
+
         #endregion
     }
 }
