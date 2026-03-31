@@ -1,97 +1,131 @@
-﻿using Gem.BLL.IServices;
-using Gem.COMMON.ViewModel.Chat;
+﻿using Gem.BLL.Common.Utility;
+using Gem.BLL.Interfaces.Services;
+using Gem.COMMON.Enum;
+using Gem.COMMON.ResultModel;
+using Gem.COMMON.ViewModel.Prompt;
+using Gem.DAL.Domain;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.Google;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace Gem.BLL.Services
 {
     public class ChatService(Kernel kernel) : IChatService
     {
-        private readonly Kernel _kernel = kernel;
-        private static readonly ConcurrentDictionary<string, ChatHistory> _userChats  = new ConcurrentDictionary<string, ChatHistory>();
+        private readonly IChatCompletionService _chatService = kernel.GetRequiredService<IChatCompletionService>();
 
-        public async Task<string> ExecutePromptAsync(VMChat request, CancellationToken cancellationToken = default)
+        public async Task<ResModel<ChatMessageContent>> ExecutePromptAsync( List<Message> messages, VMPromptRequest request,CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(request.Prompt))
-                throw new ArgumentException("Prompt cannot be empty", nameof(request));
-
-            var userId = string.Empty;
-
-            if (string.IsNullOrWhiteSpace(userId))
-                userId = request.SessionId;
-
-
-            if (string.IsNullOrWhiteSpace(userId))
-                throw new ArgumentException("UserId or SessionId is required");
-
-
-            var stopwatch = Stopwatch.StartNew();
-
             try
             {
-                // Thread-safe history per user
-                var chatHistory = GetOrCreateHistory(request.SessionId);
+                var chatHistory = BuildChatHistory(messages, request.Prompt);
+                var userMessage = await BuildUserMessageAsync(request, cancellationToken).ConfigureAwait(false);
 
-                // Add user message
-                chatHistory.AddUserMessage(request.Prompt);
+                chatHistory.Add(userMessage);
 
-                var chatCompletionService = _kernel.GetRequiredService<IChatCompletionService>();
-
-                var executionSettings = new GeminiPromptExecutionSettings
+                var settings = new GeminiPromptExecutionSettings
                 {
-                    Temperature = request.Temperature,
-                    MaxTokens = request.MaxTokens
+                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
                 };
 
-                var result = await chatCompletionService.GetChatMessageContentAsync(
-                    chatHistory,
-                    executionSettings,
-                    cancellationToken: cancellationToken
-                );
-
-                var response = result.Content ?? string.Empty;
-
-                chatHistory.AddAssistantMessage(response);
-
-                TrimHistory(chatHistory, 20);
-
+                var stopwatch = Stopwatch.StartNew();
+                var response = await _chatService.GetChatMessageContentAsync(chatHistory, settings, kernel, cancellationToken).ConfigureAwait(false);
                 stopwatch.Stop();
 
-                return response;
+                return SD.CreateResponse(response, true, $"Prompt successful ({stopwatch.ElapsedMilliseconds} ms)", (int)StatusCode.OK);
+            }
+            catch (OperationCanceledException)
+            {
+                return SD.CreateResponse<ChatMessageContent>(null, false, "Request cancelled", (int)StatusCode.RequestTimeout);
             }
             catch (Exception ex)
             {
-                stopwatch.Stop();
-                throw new InvalidOperationException($"Error executing prompt: {ex.Message}", ex);
+                return SD.CreateResponse<ChatMessageContent>(null, false, ex.Message, (int)StatusCode.InternalServerError);
             }
         }
-        public Task<string> ExecutePromptStreamAsync(VMChat request, CancellationToken cancellationToken = default)
-        {
-            throw new NotImplementedException();
-        }
 
-
-        private void TrimHistory(ChatHistory history, int maxMessages)
+        public async Task<string> ExecutePromptStreamAsync(VMPromptRequest request, CancellationToken cancellationToken = default)
         {
-            while (history.Count > maxMessages)
+            try
             {
-                history.RemoveAt(0);
+                var chatHistory = BuildChatHistory([], request.Prompt);
+                var userMessage = await BuildUserMessageAsync(request, cancellationToken).ConfigureAwait(false);
+
+                chatHistory.Add(userMessage);
+
+                var settings = new GeminiPromptExecutionSettings
+                {
+                    FunctionChoiceBehavior = FunctionChoiceBehavior.Auto()
+                };
+
+                await foreach (var chunk in _chatService.GetStreamingChatMessageContentsAsync(chatHistory, settings, kernel, cancellationToken).ConfigureAwait(false))
+                {
+                    if (!string.IsNullOrWhiteSpace(chunk.Content))
+                        return chunk.Content; 
+                }
+
+                return string.Empty;
+            }
+            catch (OperationCanceledException)
+            {
+                return "Request cancelled";
+            }
+            catch (Exception ex)
+            {
+                return $"Streaming failed: {ex.Message}";
             }
         }
 
-        private static readonly ConcurrentDictionary<string, object> _locks = new();
+        #region Private Helpers
 
-        private object GetUserLock(string userId)
+        private static ChatHistory BuildChatHistory(List<Message> messages, string prompt)
         {
-            return _locks.GetOrAdd(userId, _ => new object());
+            var chatHistory = new ChatHistory();
+
+            if (messages is { Count: > 0 })
+            {
+                foreach (var msg in messages)
+                {
+                    if (msg.Role == ChatRoles.User)
+                        chatHistory.AddUserMessage(msg.Content);
+                    else if (msg.Role == ChatRoles.Assistant)
+                        chatHistory.AddAssistantMessage(msg.Content);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(prompt))
+                chatHistory.AddUserMessage(prompt);
+
+            return chatHistory;
         }
-        private ChatHistory GetOrCreateHistory(string userId)
+
+        private static async Task<ChatMessageContent> BuildUserMessageAsync(VMPromptRequest request, CancellationToken ct)
         {
-            return _userChats.GetOrAdd(userId, _ => new ChatHistory());
+            var message = new ChatMessageContent(AuthorRole.User, request.Prompt);
+
+            if (request.Files is { Count: > 0 })
+            {
+                foreach (var file in request.Files)
+                {
+                    using var ms = new MemoryStream();
+                    await file.CopyToAsync(ms, ct).ConfigureAwait(false);
+                    var data = ms.ToArray();
+
+                    var contentType = file.ContentType.ToLowerInvariant();
+
+                    message.Items.Add(contentType switch
+                    {
+                        var type when type.StartsWith("image/") => new ImageContent(data, contentType),
+                        var type when type.StartsWith("video/") => new BinaryContent(data, contentType),
+                        var type when type.StartsWith("audio/") => new AudioContent(data, contentType),
+                        _ => throw new NotSupportedException($"Unsupported file type: {contentType}")
+                    });
+                }
+            }
+
+            return message;
         }
+        #endregion
     }
-
 }

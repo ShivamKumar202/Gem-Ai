@@ -1,31 +1,50 @@
-using Gem.API.Helpers.Wrapper;
-using Gem.BLL.IServices;
+using Gem.API.Helpers.Filters;
+using Gem.API.Helpers.Plugins;
+using Gem.API.Helpers.Utility;
 using Gem.BLL.Services;
-using Google.GenAI;
+using Gem.DAL;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.TextGeneration;
+using Microsoft.SemanticKernel.TextToImage;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<GemContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Add services to the container.
-builder.Services.AddControllers();
+// Add controllers and Swagger
+builder.Services.AddControllers(options => options.Filters.Add<ErrorHandlingFilter>());
+builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddScoped<IChatService, ChatService>();
 
-// Semantic Kernel registration
-builder.Services.AddSingleton(sp =>
+// Register your services
+builder.Services.AddServices();
+
+// 2. Register the Plugins
+// We register these as singletons so the Kernel can find them.
+builder.Services.AddSingleton<ImagePlugin>();
+builder.Services.AddSingleton<AudioPlugin>();
+
+
+// 3. Create and Register the Kernel (The Brain)
+builder.Services.AddTransient<Kernel>(sp =>
 {
-    var kernelBuilder = Kernel.CreateBuilder().AddGoogleAIGeminiChatCompletion(
+    var kernelBuilder = Kernel.CreateBuilder();
+
+    // Add Gemini Chat Completion
+    kernelBuilder.AddGoogleAIGeminiChatCompletion(
         modelId: builder.Configuration["GoogleAI:Model"],
-    apiKey: builder.Configuration["GoogleAI:ApiKey"]);
+        apiKey: builder.Configuration["GoogleAI:ApiKey"]
+    );
+
+    // Add the Plugins from the Service Provider
+    kernelBuilder.Plugins.AddFromObject(sp.GetRequiredService<ImagePlugin>());
+    kernelBuilder.Plugins.AddFromObject(sp.GetRequiredService<AudioPlugin>());
+
 
     return kernelBuilder.Build();
 });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -38,9 +57,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-
 app.UseAuthorization();
-
 app.MapControllers();
 
 app.Run();
