@@ -2,9 +2,9 @@
 
 namespace Gem.DAL.Domain
 {
-    public class Conversations
+    public class Thread
     {
-        public int Id { get; set; }
+        public string Id { get; private set; } = Guid.NewGuid().ToString();
         public string Title { get; set; }
         public string UserId { get; set; }
         [ForeignKey(nameof(UserId))]

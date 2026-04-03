@@ -1,5 +1,5 @@
 ﻿using Gem.BLL.Common.Utility;
-using Gem.BLL.IServices;
+using Gem.BLL.Interfaces.Services;
 using Gem.COMMON.Enum;
 using Gem.COMMON.ResultModel;
 using Gem.COMMON.Utility;

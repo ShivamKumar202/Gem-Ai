@@ -1,10 +1,11 @@
 using Gem.API.Helpers.Filters;
-using Gem.BLL.IServices;
+using Gem.API.Helpers.Plugins;
+using Gem.API.Helpers.Utility;
 using Gem.BLL.Services;
 using Gem.DAL;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.Connectors.Google;
+using Microsoft.SemanticKernel.TextToImage;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<GemContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -15,23 +16,31 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // Register your services
-builder.Services.AddScoped<IChatService, ChatService>();
-builder.Services.AddScoped<IImgGenerationService, ImageGenerationService>();
-builder.Services.AddScoped<ILogExceptionServices, ExceptionLogService>();
+builder.Services.AddServices();
 
-// Create Kernel as a singleton
-builder.Services.AddSingleton(sp =>
+// 2. Register the Plugins
+// We register these as singletons so the Kernel can find them.
+builder.Services.AddSingleton<ImagePlugin>();
+builder.Services.AddSingleton<AudioPlugin>();
+
+
+// 3. Create and Register the Kernel (The Brain)
+builder.Services.AddTransient<Kernel>(sp =>
 {
-    var kernel = Kernel.CreateBuilder();
+    var kernelBuilder = Kernel.CreateBuilder();
 
-    var googleChatApiKey = builder.Configuration["GoogleAI:ApiKey"];
-    var googleChatModel = builder.Configuration["GoogleAI:Model"];
-    kernel.AddGoogleAIGeminiChatCompletion(
-        modelId: googleChatModel,
-        apiKey: googleChatApiKey,
-        apiVersion: GoogleAIVersion.V1
+    // Add Gemini Chat Completion
+    kernelBuilder.AddGoogleAIGeminiChatCompletion(
+        modelId: builder.Configuration["GoogleAI:Model"],
+        apiKey: builder.Configuration["GoogleAI:ApiKey"]
     );
-    return kernel.Build();
+
+    // Add the Plugins from the Service Provider
+    kernelBuilder.Plugins.AddFromObject(sp.GetRequiredService<ImagePlugin>());
+    kernelBuilder.Plugins.AddFromObject(sp.GetRequiredService<AudioPlugin>());
+
+
+    return kernelBuilder.Build();
 });
 
 var app = builder.Build();

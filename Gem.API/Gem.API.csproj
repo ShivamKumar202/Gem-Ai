@@ -32,4 +32,8 @@
     <ProjectReference Include="..\Gem.COMMON\Gem.COMMON.csproj" />
   </ItemGroup>
 
+	<ItemGroup>
+	  <Folder Include="wwwroot\" />
+	</ItemGroup>
+
 </Project>
